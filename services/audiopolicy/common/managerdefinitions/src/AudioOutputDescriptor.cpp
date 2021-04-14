@@ -333,7 +333,7 @@ void SwAudioOutputDescriptor::changeRefCount(audio_stream_type_t stream,
 bool SwAudioOutputDescriptor::isFixedVolume(audio_devices_t device)
 {
     // unit gain if rerouting to external policy
-    if (device == AUDIO_DEVICE_OUT_REMOTE_SUBMIX) {
+    if (device == AUDIO_DEVICE_OUT_REMOTE_SUBMIX || device == AUDIO_DEVICE_OUT_BUS) {
         if (mPolicyMix != NULL) {
             ALOGV("max gain when rerouting for output=%d", mIoHandle);
             return true;

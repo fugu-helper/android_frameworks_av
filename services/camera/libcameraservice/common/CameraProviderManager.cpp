@@ -552,6 +552,27 @@ const std::string& CameraProviderManager::ProviderInfo::getType() const {
     return mType;
 }
 
+#ifdef CAMERA_USB_SUPPORT
+int CameraProviderManager::numberOfCamera() {
+    int camNum = 0;
+    for (auto& provider : mProviders) {
+        camNum = provider->getNumberOfCamera();
+    }
+    return camNum;
+}
+
+int CameraProviderManager::ProviderInfo::getNumberOfCamera() {
+    uint32_t numOfCamera=0;
+    auto ret = mInterface->getNumberOfCameras(
+            [&numOfCamera](auto status, uint32_t numberOfCamera) {
+            if (status == Status::OK) {
+                numOfCamera = numberOfCamera;
+            }
+         });
+    return numOfCamera;
+}
+#endif
+
 status_t CameraProviderManager::ProviderInfo::addDevice(const std::string& name,
         CameraDeviceStatus initialStatus, /*out*/ std::string* parsedId) {
 
@@ -1011,12 +1032,61 @@ bool CameraProviderManager::ProviderInfo::DeviceInfo3::isAPI1Compatible() const 
     return isBackwardCompatible;
 }
 
+#ifdef CAMERA_USB_SUPPORT
+status_t CameraProviderManager::ProviderInfo::DeviceInfo3::getCharacteristicsOfCamera() const {
+    Status status;
+    hardware::Return<void> ret;
+    ret = mInterface->getCameraCharacteristics([&status, this](Status s,
+                    device::V3_2::CameraMetadata metadata) {
+                status = s;
+                if (s == Status::OK) {
+                    camera_metadata_t *buffer =
+                            reinterpret_cast<camera_metadata_t*>(metadata.data());
+                    size_t expectedSize = metadata.size();
+                    int res = validate_camera_metadata_structure(buffer, &expectedSize);
+                    if (res == OK || res == CAMERA_METADATA_VALIDATION_SHIFTED) {
+                        set_camera_metadata_vendor_id(buffer, mProviderTagid);
+                        mCharacteristicsOfCamera = buffer;
+                    } else {
+                        status = Status::INTERNAL_ERROR;
+                    }
+                }
+             });
+
+    if (!ret.isOk()) {
+        ALOGE("%s: Transaction error getting camera characteristics for device %s"
+                " to check for a flash unit: %s", __FUNCTION__, mId.c_str(),
+                ret.description().c_str());
+        return BAD_VALUE;
+    }
+
+    if (status != Status::OK) {
+        ALOGE("%s: Unable to get camera characteristics for device %s: %s (%d)",
+                __FUNCTION__, mId.c_str(), CameraProviderManager::statusToString(status), status);
+        return BAD_VALUE;
+    } else {
+        return OK;
+    }
+}
+#endif
+
 status_t CameraProviderManager::ProviderInfo::DeviceInfo3::getCameraCharacteristics(
         CameraMetadata *characteristics) const {
     if (characteristics == nullptr) return BAD_VALUE;
 
+#ifdef CAMERA_USB_SUPPORT
+    status_t status = getCharacteristicsOfCamera();
+
+    if (status == OK) {
+        *characteristics = mCharacteristicsOfCamera;
+        return OK;
+    } else {
+        return BAD_VALUE;
+    }
+#else
     *characteristics = mCameraCharacteristics;
     return OK;
+#endif
 }
 
 status_t CameraProviderManager::ProviderInfo::parseProviderName(const std::string& name,

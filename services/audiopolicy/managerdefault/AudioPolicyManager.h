@@ -675,6 +675,16 @@ private:
         bool soundTriggerSupportsConcurrentCapture();
         bool mSoundTriggerSupportsConcurrentCapture;
         bool mHasComputedSoundTriggerSupportsConcurrentCapture;
+
+        /* Dynamic audio output modes in audio.dynoutput.mode
+         */
+        enum {
+            AUDIO_DYN_OUTPUT_MODE_NONE = 0x0,       // no attributes
+            AUDIO_DYN_OUTPUT_MODE_DUP = 0x1,       // duplicated audio output
+        };
+        int mDynOutputMode;
+        bool mDynOutputForced;
+
 };
 
 };

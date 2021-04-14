@@ -131,6 +131,10 @@ public:
      * accessible via the old camera API, with IDs in range of
      * [0, getAPI1CompatibleCameraCount()-1]. This value is not expected to change dynamically.
      */
+#ifdef CAMERA_USB_SUPPORT
+    int numberOfCamera();
+#endif
+
     int getAPI1CompatibleCameraCount() const;
 
     std::vector<std::string> getCameraDeviceIds() const;
@@ -258,6 +262,10 @@ private:
 
         status_t initialize();
 
+#ifdef CAMERA_USB_SUPPORT
+        int getNumberOfCamera();
+#endif
+
         const std::string& getType() const;
 
         status_t addDevice(const std::string& name,
@@ -345,6 +353,9 @@ private:
             virtual bool isAPI1Compatible() const override;
             virtual status_t getCameraCharacteristics(
                     CameraMetadata *characteristics) const override;
+#ifdef CAMERA_USB_SUPPORT
+            virtual status_t getCharacteristicsOfCamera() const;
+#endif
 
             DeviceInfo3(const std::string& name, const metadata_vendor_id_t tagId,
                     const std::string &id, uint16_t minorVersion,
@@ -353,6 +364,9 @@ private:
             virtual ~DeviceInfo3();
         private:
             CameraMetadata mCameraCharacteristics;
+#ifdef CAMERA_USB_SUPPORT
+            mutable CameraMetadata mCharacteristicsOfCamera;
+#endif
         };
 
     private:

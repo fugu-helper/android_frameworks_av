@@ -32,8 +32,16 @@
 #include <media/AudioPolicyHelper.h>
 #include <media/AudioResamplerPublic.h>
 
+#include <stdlib.h>
+#include <cutils/properties.h>
+
 #define WAIT_PERIOD_MS                  10
 #define WAIT_STREAM_END_TIMEOUT_SEC     120
+
+#define DYN_AUDIO_SYS_PROP_DUAL "persist.sys.daudioout.dual"
+#define DYN_AUDIO_SYS_PROP_SOURCE2 "persist.sys.daudioout.source2"
+#define DYN_AUDIO_SYS_PROP_ALTAPPID "persist.sys.daudioout.altappid"
+
 static const int kMaxLoopCountNotifications = 32;
 
 namespace android {
@@ -314,6 +322,36 @@ status_t AudioTrack::set(
           "flags #%x, notificationFrames %d, sessionId %d, transferType %d, uid %d, pid %d",
           streamType, sampleRate, format, channelMask, frameCount, flags, notificationFrames,
           sessionId, transferType, uid, pid);
+    const int STRSIZE = 128;
+    char appNameCallpid[STRSIZE];
+
+    char dynDual[PROPERTY_VALUE_MAX];
+    property_get(DYN_AUDIO_SYS_PROP_DUAL, dynDual, "0");
+
+    if (strncmp(dynDual, "enable", strlen("enable")) == 0) {
+        char appNameSource[PROPERTY_VALUE_MAX];
+        char path[64] = { 0 };
+        if (pid == -1) {
+            snprintf(path, sizeof(path), "/proc/%d/cmdline", getpid());
+        } else {
+            snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+        }
+
+        FILE *cmdline = fopen(path, "r");
+        if (cmdline) {
+            char application_id[64] = { 0 };
+            fread(application_id, sizeof(application_id), 1, cmdline);
+
+            property_get(DYN_AUDIO_SYS_PROP_SOURCE2, appNameSource, "0");
+            if (strncmp(application_id,appNameSource, strlen("appNameSource")) == 0) {
+                flags = (audio_output_flags_t) (flags | AUDIO_OUTPUT_FLAG_SINK2);
+            }
+
+            fclose(cmdline);
+        } else {
+            ALOGW("set(): Unable to read PID from cmdline");
+        }
+    }
 
     mThreadCanCallJava = threadCanCallJava;
 
@@ -365,6 +403,21 @@ status_t AudioTrack::set(
         return INVALID_OPERATION;
     }
 
+    pid_t pid2 = pid;
+
+    if (pid2 == -1)
+        pid2 = IPCThreadState::self()->getCallingPid();
+    if (pid2 == -1)
+        pid2 = getpid();
+
+    if (pid2 != -1) {
+        property_get(DYN_AUDIO_SYS_PROP_ALTAPPID, appNameCallpid, "-1");
+        if(pid2 == atoi(appNameCallpid)) {
+            streamType = AUDIO_STREAM_DTMF;
+        }
+    } else {
+         ALOGE("Cannot get caller pid");
+    }
     // handle default values first.
     if (streamType == AUDIO_STREAM_DEFAULT) {
         streamType = AUDIO_STREAM_MUSIC;

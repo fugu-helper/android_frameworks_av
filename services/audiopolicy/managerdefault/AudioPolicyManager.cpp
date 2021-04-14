@@ -49,6 +49,13 @@
 #include "TypeConverter.h"
 #include <policy.h>
 
+#define DYN_AUDIO_SYS_PROP_MODE     "persist.sys.daudioout.mode"
+#define DYN_AUDIO_SYS_PROP_FORCEUSE "persist.sys.daudioout.forceuse"
+#define DYN_AUDIO_SYS_PROP_UNIQUE   "persist.sys.daudioout.unique"
+#define DYN_AUDIO_SYS_PROP_SINK2    "persist.sys.daudioout.alt"
+#define DYN_AUDIO_SYS_PROP_DUAL     "persist.sys.daudioout.dual"
+#define HDMI_STATUS                 "persist.sys.hdmi.connected"
+
 namespace android {
 
 //FIXME: workaround for truncated touch sounds
@@ -68,6 +75,9 @@ status_t AudioPolicyManager::setDeviceConnectionState(audio_devices_t device,
                                                       const char *device_address,
                                                       const char *device_name)
 {
+    if (device == AUDIO_DEVICE_OUT_HDMI) {
+        setDeviceConnectionStateInt(AUDIO_DEVICE_OUT_AUX_DIGITAL2, state, device_address, device_name);
+     }
     return setDeviceConnectionStateInt(device, state, device_address, device_name);
 }
 
@@ -92,7 +102,6 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(audio_devices_t device,
 
     // connect/disconnect only 1 device at a time
     if (!audio_is_output_device(device) && !audio_is_input_device(device)) return BAD_VALUE;
-
     sp<DeviceDescriptor> devDesc =
             mHwModules.getDeviceDescriptor(device, device_address, device_name);
 
@@ -722,29 +731,29 @@ sp<IOProfile> AudioPolicyManager::getProfileForDirectOutput(
     sp<IOProfile> profile;
 
     for (size_t i = 0; i < mHwModules.size(); i++) {
-        if (mHwModules[i]->mHandle == 0) {
-            continue;
-        }
+         if (mHwModules[i]->mHandle == 0) {
+                 continue;
+         }
         for (size_t j = 0; j < mHwModules[i]->mOutputProfiles.size(); j++) {
             sp<IOProfile> curProfile = mHwModules[i]->mOutputProfiles[j];
             if (!curProfile->isCompatibleProfile(device, String8(""),
-                    samplingRate, NULL /*updatedSamplingRate*/,
-                    format, NULL /*updatedFormat*/,
-                    channelMask, NULL /*updatedChannelMask*/,
-                    flags)) {
-                continue;
+            samplingRate, NULL /*updatedSamplingRate*/,
+            format, NULL /*updatedFormat*/,
+            channelMask, NULL /*updatedChannelMask*/,
+            flags)) {
+            continue;
             }
             // reject profiles not corresponding to a device currently available
             if ((mAvailableOutputDevices.types() & curProfile->getSupportedDevicesType()) == 0) {
-                continue;
+            continue;
             }
             // if several profiles are compatible, give priority to one with offload capability
             if (profile != 0 && ((curProfile->getFlags() & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) == 0)) {
-                continue;
+            continue;
             }
             profile = curProfile;
             if ((profile->getFlags() & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) != 0) {
-                break;
+            break;
             }
         }
     }
@@ -762,7 +771,56 @@ audio_io_handle_t AudioPolicyManager::getOutput(audio_stream_type_t stream,
     audio_devices_t device = getDeviceForStrategy(strategy, false /*fromCache*/);
     ALOGV("getOutput() device %d, stream %d, samplingRate %d, format %x, channelMask %x, flags %x",
           device, stream, samplingRate, format, channelMask, flags);
+    setForceUse(AUDIO_POLICY_FORCE_FOR_MEDIA, AUDIO_POLICY_FORCE_NONE);
+    setForceUse(AUDIO_POLICY_FORCE_FOR_HDMI_SYSTEM_AUDIO, AUDIO_POLICY_FORCE_NONE);
 
+    char propValue[PROPERTY_VALUE_MAX];
+    property_get(DYN_AUDIO_SYS_PROP_MODE, propValue, "0");
+    mDynOutputMode = atoi(propValue);
+    char dynDual[PROPERTY_VALUE_MAX];
+    property_get(DYN_AUDIO_SYS_PROP_DUAL, dynDual, "0");
+    if (strncmp(dynDual, "enable", strlen("enable")) == 0) {
+        property_get(DYN_AUDIO_SYS_PROP_UNIQUE, propValue, "0");
+    }
+    else {
+        property_get(DYN_AUDIO_SYS_PROP_FORCEUSE, propValue, "0");
+    }
+    if (!mDynOutputMode) {
+        switch(atoi(propValue)) {
+            case 1:
+            case 5:
+                setForceUse(AUDIO_POLICY_FORCE_FOR_MEDIA, AUDIO_POLICY_FORCE_SPEAKER);
+                setForceUse(AUDIO_POLICY_FORCE_FOR_HDMI_SYSTEM_AUDIO, AUDIO_POLICY_FORCE_NONE);
+                mDynOutputForced = true;
+                break;
+            case 2:
+            case 4:
+            case 6:
+            case 8:
+                setForceUse(AUDIO_POLICY_FORCE_FOR_MEDIA, AUDIO_POLICY_FORCE_NONE);
+                setForceUse(AUDIO_POLICY_FORCE_FOR_HDMI_SYSTEM_AUDIO, AUDIO_POLICY_FORCE_HDMI_SYSTEM_AUDIO_ENFORCED);
+                mDynOutputForced = true;
+                break;
+           case 3:
+           case 7:
+                setForceUse(AUDIO_POLICY_FORCE_FOR_MEDIA, AUDIO_POLICY_FORCE_HEADPHONES);
+                setForceUse(AUDIO_POLICY_FORCE_FOR_HDMI_SYSTEM_AUDIO, AUDIO_POLICY_FORCE_NONE);
+                mDynOutputForced = true;
+                break;
+            case 0:
+            default:
+                // avoid to change the original behavior.
+                if (mDynOutputForced) {
+                  setForceUse(AUDIO_POLICY_FORCE_FOR_MEDIA, AUDIO_POLICY_FORCE_NONE);
+                  setForceUse(AUDIO_POLICY_FORCE_FOR_HDMI_SYSTEM_AUDIO, AUDIO_POLICY_FORCE_NONE);
+                }
+                mDynOutputForced = false;
+                break;
+        }
+    } else {
+        setForceUse(AUDIO_POLICY_FORCE_FOR_MEDIA, AUDIO_POLICY_FORCE_NONE);
+        setForceUse(AUDIO_POLICY_FORCE_FOR_HDMI_SYSTEM_AUDIO, AUDIO_POLICY_FORCE_HDMI_SYSTEM_AUDIO_ENFORCED);
+    }
     return getOutputForDevice(device, AUDIO_SESSION_ALLOCATE, stream, samplingRate, format,
                               channelMask, flags, offloadInfo);
 }
@@ -843,7 +901,111 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
 
     ALOGV("getOutputForAttr() device 0x%x, samplingRate %d, format %x, channelMask %x, flags %x",
           device, config->sample_rate, config->format, config->channel_mask, flags);
+    bool secondaryApp = false;
+    char dynDual[PROPERTY_VALUE_MAX];
+    property_get(DYN_AUDIO_SYS_PROP_DUAL, dynDual, "0");
+    if (strncmp(dynDual, "enable", strlen("enable")) == 0) {
+        if ((flags & AUDIO_OUTPUT_FLAG_SINK2) != 0) {
+            secondaryApp = true;
+            char sink2Value[PROPERTY_VALUE_MAX];
+            int dynSink2Name = 0;
+            property_get(DYN_AUDIO_SYS_PROP_SINK2, sink2Value, "0");
+            dynSink2Name = atoi(sink2Value);
+            ALOGV("Dyn SINK2 =%d", dynSink2Name);
+            switch(dynSink2Name) {
+                case 1:
+                    device = AUDIO_DEVICE_OUT_SPEAKER;
+                    break;
+                case 2:
+                    device = AUDIO_DEVICE_OUT_AUX_DIGITAL;
+                    break;
+                case 3:
+                    if (mAvailableOutputDevices.types() & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) {
+                        device = AUDIO_DEVICE_OUT_BLUETOOTH_A2DP;
+                    }
+                    else if (mAvailableOutputDevices.types() & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES) {
+                        device = AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES;
+                    } else if (mAvailableOutputDevices.types() &
+                               AUDIO_DEVICE_OUT_WIRED_HEADSET) {
+                        device = AUDIO_DEVICE_OUT_WIRED_HEADSET;
+                    } else {
+                        if (mAvailableOutputDevices.types() &
+                            AUDIO_DEVICE_OUT_USB_HEADSET) {
+                            device = AUDIO_DEVICE_OUT_USB_HEADSET;
+                        } else {
+                            device = AUDIO_DEVICE_OUT_WIRED_HEADSET;
+                        }
+                    }
+                    break;
+                case 4:
+                    device = AUDIO_DEVICE_OUT_AUX_DIGITAL2;
+                    break;
+                default :
+                    if (device == AUDIO_DEVICE_OUT_AUX_DIGITAL) {
+                        char hdmiStatus[PROPERTY_VALUE_MAX];
+                        int hdmiValue = 0;
+                        property_get(HDMI_STATUS, hdmiStatus, "0");
+                        hdmiValue = atoi(hdmiStatus);
+                        if(!hdmiValue) {
+                            device = AUDIO_DEVICE_OUT_AUX_DIGITAL2;
+                        }
+                    }
+            }
+            ALOGD("Secondary audio device %x", device);
+        }
+    }
 
+    if (!secondaryApp) {
+        char propValue[PROPERTY_VALUE_MAX];
+        property_get(DYN_AUDIO_SYS_PROP_MODE, propValue, "0");
+        mDynOutputMode = atoi(propValue);
+        if (mDynOutputMode != AUDIO_DYN_OUTPUT_MODE_DUP) {
+            char sinkValue[PROPERTY_VALUE_MAX];
+            int dynSinkName = 0;
+            property_get(DYN_AUDIO_SYS_PROP_FORCEUSE, sinkValue, "0");
+            dynSinkName = atoi(sinkValue);
+            switch(dynSinkName){
+                case 1:
+                    device = AUDIO_DEVICE_OUT_SPEAKER;
+                    break;
+                case 2:
+                    device = AUDIO_DEVICE_OUT_AUX_DIGITAL;
+                    break;
+                case 3:
+                    if (mAvailableOutputDevices.types() & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) {
+                        device = AUDIO_DEVICE_OUT_BLUETOOTH_A2DP;
+                    } else if (mAvailableOutputDevices.types() &
+                               AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES) {
+                        device = AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES;
+                    } else if(mAvailableOutputDevices.types() &
+                             AUDIO_DEVICE_OUT_WIRED_HEADSET) {
+                        device = AUDIO_DEVICE_OUT_WIRED_HEADSET;
+                    } else {
+                        if (mAvailableOutputDevices.types() &
+                            AUDIO_DEVICE_OUT_USB_HEADSET) {
+                            device = AUDIO_DEVICE_OUT_USB_HEADSET;
+                        } else {
+                            device = AUDIO_DEVICE_OUT_WIRED_HEADSET;
+                        }
+                    }
+                    break;
+                case 4:
+                    device = AUDIO_DEVICE_OUT_AUX_DIGITAL2;
+                    break;
+                default :
+                    device = mEngine->getDeviceForStrategy(strategy);
+                    if (device == AUDIO_DEVICE_OUT_AUX_DIGITAL) {
+                        char hdmiStatus[PROPERTY_VALUE_MAX];
+                        int hdmiValue = 0;
+                        property_get(HDMI_STATUS, hdmiStatus, "0");
+                        hdmiValue = atoi(hdmiStatus);
+                        if(!hdmiValue) {
+                            device = AUDIO_DEVICE_OUT_AUX_DIGITAL2;
+                        }
+                    }
+               }
+        }
+    }
     *output = getOutputForDevice(device, session, *stream,
                                  config->sample_rate, config->format, config->channel_mask,
                                  flags, &config->offload_info);
@@ -1317,10 +1479,13 @@ status_t AudioPolicyManager::startSource(const sp<AudioOutputDescriptor>& output
         if (isInCall()) {
             handleIncallSonification(stream, true, false);
         }
+        int volumedevice = device;
+        if (volumedevice & AUDIO_DEVICE_OUT_HDMI && volumedevice & (AUDIO_DEVICE_OUT_SPEAKER | AUDIO_DEVICE_OUT_WIRED_HEADSET | AUDIO_DEVICE_OUT_WIRED_HEADPHONE))
+            volumedevice = AUDIO_DEVICE_OUT_HDMI;
 
         // apply volume rules for current stream and device if necessary
         checkAndSetVolume(stream,
-                          mVolumeCurves->getVolumeIndex(stream, outputDesc->device()),
+                          mVolumeCurves->getVolumeIndex(stream, volumedevice),
                           outputDesc,
                           outputDesc->device());
 
@@ -2293,6 +2458,14 @@ status_t AudioPolicyManager::setStreamVolumeIndex(audio_stream_type_t stream,
                 }
             }
         }
+        char propValue[PROPERTY_VALUE_MAX];
+        property_get("persist.sys.daudioout.altapp", propValue, "0");
+        // APP has been assigned, could start by com.
+        if (strlen(propValue) > 4 && stream == AUDIO_STREAM_DTMF) {
+            checkAndSetVolume(AUDIO_STREAM_DTMF, index, desc, curDevice);
+        }
+       if (curDevice == AUDIO_DEVICE_OUT_AUX_DIGITAL2 && AUDIO_STREAM_MUSIC == stream)
+             checkAndSetVolume(AUDIO_STREAM_MUSIC, index, desc, AUDIO_DEVICE_OUT_AUX_DIGITAL2);
     }
     return status;
 }
@@ -2415,6 +2588,17 @@ bool AudioPolicyManager::isStreamActive(audio_stream_type_t stream, uint32_t inP
         }
         active = mOutputs.isStreamActive((audio_stream_type_t)curStream, inPastMs);
     }
+
+   char propValue[PROPERTY_VALUE_MAX];
+    property_get("persist.sys.daudioout.altapp", propValue, "0");
+    // APP has been assigned
+    bool altenabled = strlen(propValue) > 4;
+
+    if (stream == AUDIO_STREAM_MUSIC && altenabled &&
+        mOutputs.isStreamActive(AUDIO_STREAM_DTMF, inPastMs)) {
+        return true;
+    }
+
     return active;
 }
 
@@ -3234,6 +3418,7 @@ void AudioPolicyManager::clearAudioPatches(uid_t uid)
 void AudioPolicyManager::checkStrategyRoute(routing_strategy strategy,
                                             audio_io_handle_t ouptutToSkip)
 {
+
     audio_devices_t device = getDeviceForStrategy(strategy, false /*fromCache*/);
     SortedVector<audio_io_handle_t> outputs = getOutputsForDevice(device, mOutputs);
     for (size_t j = 0; j < mOutputs.size(); j++) {
@@ -3593,7 +3778,9 @@ AudioPolicyManager::AudioPolicyManager(AudioPolicyClientInterface *clientInterfa
     mTtsOutputAvailable(false),
     mMasterMono(false),
     mMusicEffectOutput(AUDIO_IO_HANDLE_NONE),
-    mHasComputedSoundTriggerSupportsConcurrentCapture(false)
+    mHasComputedSoundTriggerSupportsConcurrentCapture(false),
+    mDynOutputMode(AUDIO_DYN_OUTPUT_MODE_NONE),
+    mDynOutputForced(false)
 {
     mUidCached = getuid();
     mpClientInterface = clientInterface;
@@ -3621,6 +3808,9 @@ AudioPolicyManager::AudioPolicyManager(AudioPolicyClientInterface *clientInterfa
     }
     // must be done after reading the policy (since conditionned by Speaker Drc Enabling)
     mVolumeCurves->initializeVolumeCurves(speakerDrcEnabled);
+    char propValue[PROPERTY_VALUE_MAX];
+    property_get(DYN_AUDIO_SYS_PROP_MODE, propValue, "0");
+    mDynOutputMode = atoi(propValue);
 
     // Once policy config has been parsed, retrieve an instance of the engine and initialize it.
     audio_policy::EngineInstance *engineInstance = audio_policy::EngineInstance::getInstance();
@@ -3656,7 +3846,6 @@ AudioPolicyManager::AudioPolicyManager(AudioPolicyClientInterface *clientInterfa
         for (size_t j = 0; j < mHwModules[i]->mOutputProfiles.size(); j++)
         {
             const sp<IOProfile> outProfile = mHwModules[i]->mOutputProfiles[j];
-
             if (!outProfile->hasSupportedDevices()) {
                 ALOGW("Output profile contains no device on module %s", mHwModules[i]->getName());
                 continue;
@@ -4075,6 +4264,7 @@ status_t AudioPolicyManager::checkOutputsForDevice(const sp<DeviceDescriptor>& d
 {
     audio_devices_t device = devDesc->type();
     sp<SwAudioOutputDescriptor> desc;
+
 
     if (audio_device_is_digital(device)) {
         // erase all current sample rates, formats and channel masks
@@ -4828,6 +5018,23 @@ audio_devices_t AudioPolicyManager::getDevicesForStream(audio_stream_type_t stre
             sp<AudioOutputDescriptor> outputDesc = mOutputs.valueFor(outputs[i]);
             if (outputDesc->isStreamActive((audio_stream_type_t)curStream)) {
                 curDevices |= outputDesc->device();
+             /* On DUP audio output mode, Some combination isn't supported, force to
+               return HDMI as device only */
+            if (devices & AUDIO_DEVICE_OUT_HDMI && mDynOutputMode == AUDIO_DYN_OUTPUT_MODE_DUP)
+                devices = AUDIO_DEVICE_OUT_HDMI;
+
+            if (stream == AUDIO_STREAM_DTMF) {
+                char propValue[PROPERTY_VALUE_MAX];
+                property_get(DYN_AUDIO_SYS_PROP_SINK2, propValue, "0");
+                if (atoi(propValue) == 4 || atoi(propValue) == 2) {
+                     devices = AUDIO_DEVICE_OUT_AUX_DIGITAL;
+                }
+            } else if (stream == AUDIO_STREAM_MUSIC) {
+                char propValue[PROPERTY_VALUE_MAX];
+                property_get(DYN_AUDIO_SYS_PROP_UNIQUE, propValue, "0");
+                if (atoi(propValue) == 2 || atoi(propValue) == 4 || atoi(propValue) == 6 || atoi(propValue) == 8)
+                     devices = AUDIO_DEVICE_OUT_AUX_DIGITAL;
+            }
             }
         }
         devices |= curDevices;
@@ -4951,10 +5158,103 @@ audio_devices_t AudioPolicyManager::getDeviceForStrategy(routing_strategy strate
 
     if (fromCache) {
         ALOGVV("getDeviceForStrategy() from cache strategy %d, device %x",
-              strategy, mDeviceForStrategy[strategy]);
+                strategy, mDeviceForStrategy[strategy]);
         return mDeviceForStrategy[strategy];
     }
-    return mEngine->getDeviceForStrategy(strategy);
+    audio_devices_t device = mEngine->getDeviceForStrategy(strategy);
+    //if headset is connected, combine headset and hdmi device.
+    char propValue[PROPERTY_VALUE_MAX];
+    property_get(DYN_AUDIO_SYS_PROP_MODE, propValue, "0");
+    mDynOutputMode = atoi(propValue);
+    if (mDynOutputMode == AUDIO_DYN_OUTPUT_MODE_DUP) {
+        if (device & (AUDIO_DEVICE_OUT_LINE | AUDIO_DEVICE_OUT_WIRED_HEADPHONE | AUDIO_DEVICE_OUT_WIRED_HEADSET)) {
+            device = (AUDIO_DEVICE_OUT_HDMI |AUDIO_DEVICE_OUT_WIRED_HEADSET |device );
+        } else {
+            device = (AUDIO_DEVICE_OUT_HDMI | AUDIO_DEVICE_OUT_SPEAKER);
+        }
+        ALOGD("dup mode %d is enabled, device 0x%x", mDynOutputMode, device);
+    } else {
+        if (strategy == STRATEGY_MEDIA) {
+            if (mEngine->getForceUse(AUDIO_POLICY_FORCE_FOR_HDMI_SYSTEM_AUDIO) == AUDIO_POLICY_FORCE_HDMI_SYSTEM_AUDIO_ENFORCED) {
+                device = AUDIO_DEVICE_OUT_HDMI;
+            }
+            char propValue[PROPERTY_VALUE_MAX];
+            char dynDual[PROPERTY_VALUE_MAX];
+            property_get(DYN_AUDIO_SYS_PROP_DUAL, dynDual, "0");
+            if (strncmp(dynDual, "enable", strlen("enable")) == 0) {
+                property_get(DYN_AUDIO_SYS_PROP_UNIQUE, propValue, "0");
+            }
+            else {
+                property_get(DYN_AUDIO_SYS_PROP_FORCEUSE, propValue, "0");
+            }
+            if (atoi(propValue) == 4 || atoi(propValue) == 8) {
+                device = AUDIO_DEVICE_OUT_AUX_DIGITAL2;
+            } else if (atoi(propValue) == 3 || atoi(propValue) == 7) {
+                if (mAvailableOutputDevices.types() & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) {
+                    device = AUDIO_DEVICE_OUT_BLUETOOTH_A2DP;
+                } else if (mAvailableOutputDevices.types() & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES) {
+                    device = AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES;
+                } else if(mAvailableOutputDevices.types() & AUDIO_DEVICE_OUT_WIRED_HEADSET) {
+                    device = AUDIO_DEVICE_OUT_WIRED_HEADSET;
+                } else {
+                    if (mAvailableOutputDevices.types() &
+                        AUDIO_DEVICE_OUT_USB_HEADSET) {
+                        device = AUDIO_DEVICE_OUT_USB_HEADSET;
+                    } else {
+                        device = AUDIO_DEVICE_OUT_WIRED_HEADSET;
+                   }
+                }
+            } else if (atoi(propValue) == 2 || atoi(propValue) == 6) {
+                device = AUDIO_DEVICE_OUT_AUX_DIGITAL;
+            } else if (atoi(propValue) == 1 || atoi(propValue) == 5) {
+                device = AUDIO_DEVICE_OUT_SPEAKER;
+            } else if (device == (AUDIO_DEVICE_OUT_AUX_DIGITAL2 | AUDIO_DEVICE_OUT_AUX_DIGITAL)) {
+                device = AUDIO_DEVICE_OUT_AUX_DIGITAL;
+            } else if (atoi(propValue) == 0) {
+                //default
+                if (device == AUDIO_DEVICE_OUT_AUX_DIGITAL) {
+                    char hdmiStatus[PROPERTY_VALUE_MAX];
+                    int hdmiValue = 0;
+                    property_get(HDMI_STATUS, hdmiStatus, "0");
+                    hdmiValue = atoi(hdmiStatus);
+                    if(!hdmiValue) {
+                        device = AUDIO_DEVICE_OUT_AUX_DIGITAL2;
+                    }
+                }
+            }
+            ALOGD("streagy %x force to use device %x",strategy, device);
+        }
+        // Dup mode can't also enable the secondary audio output.
+    }
+    if ((STRATEGY_DTMF == strategy) || (STRATEGY_SONIFICATION == strategy)
+        || (STRATEGY_SONIFICATION_RESPECTFUL == strategy)) {
+        char propValue[PROPERTY_VALUE_MAX];
+        char dynDual[PROPERTY_VALUE_MAX];
+        property_get(DYN_AUDIO_SYS_PROP_DUAL, dynDual, "0");
+        if (strncmp(dynDual, "enable", strlen("enable")) == 0) {
+            property_get(DYN_AUDIO_SYS_PROP_SINK2, propValue, "0");
+        } else {
+            property_get(DYN_AUDIO_SYS_PROP_FORCEUSE, propValue, "0");
+        }
+        switch (atoi(propValue)) {
+            case 1:  // speaker
+                device =  AUDIO_DEVICE_OUT_SPEAKER;
+                break;
+            case 2: // hdmi
+                device = AUDIO_DEVICE_OUT_AUX_DIGITAL;
+                break;
+            case 3: // headset
+                device = AUDIO_DEVICE_OUT_WIRED_HEADSET;
+                break;
+            case 4: // hdmi 2
+                device = AUDIO_DEVICE_OUT_AUX_DIGITAL2;
+                break;
+            case 0: // system default, no change.
+            default:
+                break;
+        }
+    }
+    return device;
 }
 
 void AudioPolicyManager::updateDevicesAndOutputs()

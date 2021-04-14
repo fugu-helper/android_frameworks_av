@@ -439,6 +439,9 @@ Status CameraService::getNumberOfCameras(int32_t type, int32_t* numCameras) {
     Mutex::Autolock l(mServiceLock);
     switch (type) {
         case CAMERA_TYPE_BACKWARD_COMPATIBLE:
+#ifdef CAMERA_USB_SUPPORT
+            mNumberOfNormalCameras = mCameraProviderManager->numberOfCamera();
+#endif
             *numCameras = mNumberOfNormalCameras;
             break;
         case CAMERA_TYPE_ALL:

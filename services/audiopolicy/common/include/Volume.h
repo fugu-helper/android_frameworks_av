@@ -90,6 +90,11 @@ public:
                 device = AUDIO_DEVICE_OUT_AUX_LINE;
             } else if (device & AUDIO_DEVICE_OUT_SPDIF) {
                 device = AUDIO_DEVICE_OUT_SPDIF;
+            /* On DUP audio output mode, Some combination isn't supported to adjust volume, force to
+               return HDMI as device only */
+            } else if (device & AUDIO_DEVICE_OUT_HDMI &&
+                       (device & (AUDIO_DEVICE_OUT_LINE | AUDIO_DEVICE_OUT_WIRED_HEADPHONE |AUDIO_DEVICE_OUT_SPEAKER |AUDIO_DEVICE_OUT_WIRED_HEADSET))) {
+                device = AUDIO_DEVICE_OUT_HDMI;
             } else {
                 device = (audio_devices_t)(device & AUDIO_DEVICE_OUT_ALL_A2DP);
             }
@@ -124,6 +129,7 @@ public:
         case AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET:
         case AUDIO_DEVICE_OUT_BLUETOOTH_A2DP:
         case AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES:
+        case AUDIO_DEVICE_OUT_AUX_DIGITAL2:
         case AUDIO_DEVICE_OUT_USB_HEADSET:
             return DEVICE_CATEGORY_HEADSET;
         case AUDIO_DEVICE_OUT_LINE:
